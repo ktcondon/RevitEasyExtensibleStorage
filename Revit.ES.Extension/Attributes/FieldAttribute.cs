@@ -1,6 +1,4 @@
 /* 
- * Copyright 2021 © Victor Chekalin
- * 
  * THIS CODE AND INFORMATION ARE PROVIDED "AS IS" WITHOUT WARRANTY OF ANY 
  * KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A
@@ -8,20 +6,18 @@
  * 
  */
 
-using System;
-using Autodesk.Revit.DB;
+namespace Revit.ES.Extension.Attributes;
 
-namespace Revit.ES.Extension.Attributes
+[AttributeUsage(AttributeTargets.Property)]
+public class FieldAttribute : Attribute
 {
-    [AttributeUsage(AttributeTargets.Property)]
-    public class FieldAttribute : Attribute
+    public FieldAttribute()
     {
-        public FieldAttribute()
-        {
-            UnitType = UnitType.UT_Undefined;
-        }
-
-        public string Documentation { get; set; }
-        public UnitType UnitType { get; set; }
+        UnitTypeId = null;
+        SpecTypeId = null;
     }
+
+    public string Documentation { get; set; }
+    public string UnitTypeId { get; set; }
+    public string SpecTypeId { get; set; }
 }

@@ -1,6 +1,4 @@
 /* 
- * Copyright 2021 © Victor Chekalin
- * 
  * THIS CODE AND INFORMATION ARE PROVIDED "AS IS" WITHOUT WARRANTY OF ANY 
  * KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A
@@ -8,175 +6,138 @@
  * 
  */
 
-using System;
-using System.Collections.Generic;
-using System.Reflection;
-using System.Text;
 using Autodesk.Revit.DB.ExtensibleStorage;
 using Revit.ES.Extension.Attributes;
+using System.Reflection;
+using System.Text;
 
-namespace Revit.ES.Extension
+namespace Revit.ES.Extension;
+
+public interface IFieldFactory
 {
-    public interface IFieldFactory
-    {
-        FieldBuilder CreateField(SchemaBuilder schemaBuilder,
-            PropertyInfo propertyInfo);
-    }
+    FieldBuilder CreateField(SchemaBuilder schemaBuilder, PropertyInfo propertyInfo);
+}
 
-    class FieldFactory : IFieldFactory
+internal class FieldFactory : IFieldFactory
+{
+    public FieldBuilder CreateField(SchemaBuilder schemaBuilder, PropertyInfo propertyInfo)
     {
-        public FieldBuilder CreateField(SchemaBuilder schemaBuilder, 
-            PropertyInfo propertyInfo)
+        IFieldFactory fieldFactory = null;
+
+        Type fieldType = propertyInfo.PropertyType;
+
+        /* Check whether fieldType is generic or not.
+         * Only IList<> and IDictionary are supported.            
+         */
+        if (fieldType.IsGenericType)
         {
-            IFieldFactory fieldFactory = null;
-
-            var fieldType = propertyInfo.PropertyType;
-
-            /* Check whether fieldType is generic or not.
-             * Only IList<> and IDictionary are supported.            
-             */
-            if (fieldType.IsGenericType)
+            foreach (Type interfaceType in fieldType.GetInterfaces())
             {
-                foreach (var interfaceType in fieldType.GetInterfaces())
-                {
-                    if (interfaceType.IsGenericType &&
-                        interfaceType.GetGenericTypeDefinition() == typeof(IList<>))
-                    {
-                        fieldFactory = new ArrayFieldCreator();
-                        break;
-                    }
-                    else if (interfaceType.IsGenericType &&
-                        interfaceType.GetGenericTypeDefinition() == typeof(IDictionary<,>))
-                    {
-                        fieldFactory = new MapFieldCreator();
-                        break;                        
-                    }
-                }
-                /*
-                if (fieldType.GetGenericTypeDefinition() == typeof(IList<>))
+                if (interfaceType.IsGenericType && interfaceType.GetGenericTypeDefinition() == typeof(IList<>))
                 {
                     fieldFactory = new ArrayFieldCreator();
+                    break;
                 }
-                else if (fieldType.GetGenericTypeDefinition() == typeof(IDictionary<,>))
+                else if (interfaceType.IsGenericType && interfaceType.GetGenericTypeDefinition() == typeof(IDictionary<,>))
                 {
                     fieldFactory = new MapFieldCreator();
-                }
-                else 
-                 */
-                if (fieldFactory == null)
-                {
-                    var sb = new StringBuilder();
-                    sb.AppendLine(string.Format("Type {0} does not supported.", fieldType));
-                    sb.AppendLine("Only IList<T> and IDictionary<TKey, TValue> generic types are supproted");
-                    throw new NotSupportedException(sb.ToString());
+                    break;
                 }
             }
-            else
+
+            if (fieldFactory == null)
             {
-                fieldFactory = new SimpleFieldCreator();
+                StringBuilder sb = new();
+                sb.AppendLine(string.Format("Type {0} does not supported.", fieldType));
+                sb.AppendLine("Only IList<T> and IDictionary<TKey, TValue> generic types are supproted");
+
+                throw new NotSupportedException(sb.ToString());
             }
-            return fieldFactory.CreateField(schemaBuilder, propertyInfo);
         }
+        else
+        {
+            fieldFactory = new SimpleFieldCreator();
+        }
+
+        return fieldFactory.CreateField(schemaBuilder, propertyInfo);
     }
+}
 
-    class SimpleFieldCreator : IFieldFactory
+internal class SimpleFieldCreator : IFieldFactory
+{
+    public FieldBuilder CreateField(SchemaBuilder schemaBuilder, PropertyInfo propertyInfo)
     {
-        public FieldBuilder CreateField(SchemaBuilder schemaBuilder, PropertyInfo propertyInfo)
+        FieldBuilder fieldBuilder;
+
+        Type iRevitEntity = propertyInfo.PropertyType.GetInterface("IRevitEntity");
+
+        if (iRevitEntity != null)
         {
-            FieldBuilder fieldBuilder;
+            AttributeExtractor<SchemaAttribute> schemaAttributeExtractor = new();
+            SchemaAttribute subSchemaAttribute = schemaAttributeExtractor.GetAttribute(propertyInfo.PropertyType);
 
-            var iRevitEntity = propertyInfo.PropertyType.GetInterface("IRevitEntity");
-            if (iRevitEntity != null)
-            {
-                AttributeExtractor<SchemaAttribute> schemaAttributeExtractor =
-                    new AttributeExtractor<SchemaAttribute>();
-
-                fieldBuilder = schemaBuilder
-                    .AddSimpleField(propertyInfo.Name, typeof(Entity));
-                var subSchemaAttribute = 
-                    schemaAttributeExtractor
-                    .GetAttribute(propertyInfo.PropertyType);
-                fieldBuilder
-                    .SetSubSchemaGUID(subSchemaAttribute.GUID);
-            }
-            else
-            {
-                fieldBuilder =
-                    schemaBuilder.AddSimpleField(propertyInfo.Name, propertyInfo.PropertyType);
-            }
-
-            return fieldBuilder;
+            fieldBuilder = schemaBuilder.AddSimpleField(propertyInfo.Name, typeof(Entity));
+            fieldBuilder.SetSubSchemaGUID(subSchemaAttribute.GUID);
         }
-    }    
-
-    class ArrayFieldCreator : IFieldFactory
-    {
-        public FieldBuilder CreateField(SchemaBuilder schemaBuilder, 
-            PropertyInfo propertyInfo)
+        else
         {
-            FieldBuilder fieldBuilder;
-
-            // Check whether generic type is subentity or not
-            var genericType = propertyInfo.PropertyType.GetGenericArguments()[0];
-
-            var iRevitEntity = genericType.GetInterface("IRevitEntity");
-
-            if (iRevitEntity != null)
-            {
-                fieldBuilder =
-                    schemaBuilder.AddArrayField(propertyInfo.Name, typeof(Entity));
-
-                AttributeExtractor<SchemaAttribute> schemaAttributeExtractor =
-                    new AttributeExtractor<SchemaAttribute>();               
-                var subSchemaAttribute =
-                    schemaAttributeExtractor
-                    .GetAttribute(genericType);
-                fieldBuilder
-                    .SetSubSchemaGUID(subSchemaAttribute.GUID);
-            }
-            else
-            {
-                fieldBuilder =
-                    schemaBuilder.AddArrayField(propertyInfo.Name, genericType);
-            }
-            return fieldBuilder;
+            fieldBuilder = schemaBuilder.AddSimpleField(propertyInfo.Name, propertyInfo.PropertyType);
         }
+
+        return fieldBuilder;
     }
+}
 
-    class MapFieldCreator : IFieldFactory
+internal class ArrayFieldCreator : IFieldFactory
+{
+    public FieldBuilder CreateField(SchemaBuilder schemaBuilder, PropertyInfo propertyInfo)
     {
-        public FieldBuilder CreateField(SchemaBuilder schemaBuilder, 
-            PropertyInfo propertyInfo)
+        FieldBuilder fieldBuilder;
+
+        // Check whether generic type is subentity or not
+        Type genericType = propertyInfo.PropertyType.GetGenericArguments()[0];
+
+        Type iRevitEntity = genericType.GetInterface("IRevitEntity");
+
+        if (iRevitEntity != null)
         {
-            FieldBuilder fieldBuilder;
+            AttributeExtractor<SchemaAttribute> schemaAttributeExtractor = new();
+            SchemaAttribute subSchemaAttribute = schemaAttributeExtractor.GetAttribute(genericType);
 
-            var genericKeyType = propertyInfo.PropertyType.GetGenericArguments()[0];
-            var genericValueType = propertyInfo.PropertyType.GetGenericArguments()[1];
-
-            if (genericValueType.GetInterface("IRevitEntity") != null)
-            {
-                fieldBuilder =
-                schemaBuilder.AddMapField(propertyInfo.Name,
-                                          genericKeyType, typeof(Entity));
-
-                AttributeExtractor<SchemaAttribute> schemaAttributeExtractor =
-                   new AttributeExtractor<SchemaAttribute>();
-                var subSchemaAttribute =
-                    schemaAttributeExtractor
-                    .GetAttribute(genericValueType);
-                fieldBuilder
-                    .SetSubSchemaGUID(subSchemaAttribute.GUID);
-            }
-            else
-            {
-                fieldBuilder =
-                schemaBuilder.AddMapField(propertyInfo.Name,
-                                          genericKeyType, genericValueType);                
-            }
-
-            var needSubschemaId = fieldBuilder.NeedsSubSchemaGUID();
-
-            return fieldBuilder;
+            fieldBuilder = schemaBuilder.AddArrayField(propertyInfo.Name, typeof(Entity));
+            fieldBuilder.SetSubSchemaGUID(subSchemaAttribute.GUID);
         }
+        else
+        {
+            fieldBuilder = schemaBuilder.AddArrayField(propertyInfo.Name, genericType);
+        }
+
+        return fieldBuilder;
+    }
+}
+
+internal class MapFieldCreator : IFieldFactory
+{
+    public FieldBuilder CreateField(SchemaBuilder schemaBuilder, PropertyInfo propertyInfo)
+    {
+        FieldBuilder fieldBuilder;
+
+        Type genericKeyType = propertyInfo.PropertyType.GetGenericArguments()[0];
+        Type genericValueType = propertyInfo.PropertyType.GetGenericArguments()[1];
+
+        if (genericValueType.GetInterface("IRevitEntity") != null)
+        {
+            AttributeExtractor<SchemaAttribute> schemaAttributeExtractor = new();
+            SchemaAttribute subSchemaAttribute = schemaAttributeExtractor.GetAttribute(genericValueType);
+
+            fieldBuilder = schemaBuilder.AddMapField(propertyInfo.Name, genericKeyType, typeof(Entity));
+            fieldBuilder.SetSubSchemaGUID(subSchemaAttribute.GUID);
+        }
+        else
+        {
+            fieldBuilder = schemaBuilder.AddMapField(propertyInfo.Name, genericKeyType, genericValueType);
+        }
+
+        return fieldBuilder;
     }
 }

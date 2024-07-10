@@ -1,6 +1,4 @@
 /* 
- * Copyright 2012 © Victor Chekalin
- * 
  * THIS CODE AND INFORMATION ARE PROVIDED "AS IS" WITHOUT WARRANTY OF ANY 
  * KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A
@@ -8,101 +6,82 @@
  * 
  */
 
-using System;
-using System.Reflection;
 using Autodesk.Revit.DB.ExtensibleStorage;
 using Revit.ES.Extension.Attributes;
+using System.Reflection;
 
-namespace Revit.ES.Extension
+namespace Revit.ES.Extension;
+
+/// <summary>
+/// Create an Autodesk Extensible storage schema from a type
+/// </summary>
+public class SchemaCreator : ISchemaCreator
 {
-    /// <summary>
-    /// Create an Autodesk Extensible storage schema from a type
-    /// </summary>
-    public class SchemaCreator : ISchemaCreator
+    private readonly AttributeExtractor<SchemaAttribute> schemaAttributeExtractor = new();
+    private readonly AttributeExtractor<FieldAttribute> fieldAttributeExtractor = new();
+
+    private readonly IFieldFactory fieldFactory = new FieldFactory();
+
+    public Schema CreateSchema(Type type)
     {
-        private readonly AttributeExtractor<SchemaAttribute> _schemaAttributeExtractor = 
-            new AttributeExtractor<SchemaAttribute>();
-        private readonly AttributeExtractor<FieldAttribute>  _fieldAttributeExtractor = 
-            new AttributeExtractor<FieldAttribute>();
+        SchemaAttribute schemaAttribute = schemaAttributeExtractor.GetAttribute(type);
 
-        private readonly IFieldFactory _fieldFactory = new FieldFactory();
+        Schema existingSchema = Schema.Lookup(schemaAttribute.GUID);
+        if (existingSchema is not null)
+            return existingSchema;
+        if (existingSchema?.IsValidObject ?? false)
+            return existingSchema;
 
-        #region Implementation of ISchemaCreator
+        // Create a new Schema using SchemaAttribute Properties
+        SchemaBuilder schemaBuilder = new(schemaAttribute.GUID);
+        schemaBuilder.SetSchemaName(schemaAttribute.SchemaName);
 
-        public Schema CreateSchema(Type type)
+        // Set up other schema properties if they exists
+        if (schemaAttribute.ApplicationGUID != Guid.Empty)
+            schemaBuilder.SetApplicationGUID(schemaAttribute.ApplicationGUID);
+
+        if (!string.IsNullOrEmpty(schemaAttribute.Documentation))
+            schemaBuilder.SetDocumentation(schemaAttribute.Documentation);
+
+#if (RELEASE)
+    if (schemaAttribute.ReadAccessLevel != default)
+        schemaBuilder.SetReadAccessLevel(schemaAttribute.ReadAccessLevel);
+    if (schemaAttribute.WriteAccessLevel != default)
+        schemaBuilder.SetWriteAccessLevel(schemaAttribute.WriteAccessLevel);
+#else
+        if (schemaAttribute.ReadAccessLevel != default)
+            schemaBuilder.SetReadAccessLevel(AccessLevel.Public);
+        if (schemaAttribute.WriteAccessLevel != default)
+            schemaBuilder.SetWriteAccessLevel(AccessLevel.Public);
+#endif
+        if (!string.IsNullOrEmpty(schemaAttribute.VendorId))
+            schemaBuilder.SetVendorId(schemaAttribute.VendorId);
+
+        PropertyInfo[] properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+
+        // Iterate all of the RevitEntity Properties
+        foreach (PropertyInfo pi in properties)
         {
-            SchemaAttribute schemaAttribute = 
-                _schemaAttributeExtractor.GetAttribute(type);
-            
-            // Create a new Schema using SchemaAttribute Properties
-            SchemaBuilder schemaBuilder = new SchemaBuilder(schemaAttribute.GUID);
-            schemaBuilder.SetSchemaName(schemaAttribute.SchemaName);
+            //get the field attribute of public properties
+            object[] propertyAttributes = pi.GetCustomAttributes(typeof(FieldAttribute), true);
 
-            // Set up other schema properties if they exists
-            if (schemaAttribute.ApplicationGUID != Guid.Empty)
-                schemaBuilder.SetApplicationGUID(schemaAttribute.ApplicationGUID);
+            // if property does not have a FieldAttribute skip this property
+            if (propertyAttributes.Length == 0)
+                continue;
 
-            if (!string.IsNullOrEmpty(schemaAttribute.Documentation))
-                schemaBuilder.SetDocumentation(schemaAttribute.Documentation);
+            FieldAttribute fieldAttribute = fieldAttributeExtractor.GetAttribute(pi);
 
-            if (schemaAttribute.ReadAccessLevel != default(AccessLevel))
-                schemaBuilder.SetReadAccessLevel(schemaAttribute.ReadAccessLevel);
+            FieldBuilder fieldBuilder = fieldFactory.CreateField(schemaBuilder, pi);
 
-            if (schemaAttribute.WriteAccessLevel != default(AccessLevel))
-                schemaBuilder.SetWriteAccessLevel(schemaAttribute.WriteAccessLevel);
-
-            if (!string.IsNullOrEmpty(schemaAttribute.VendorId))
-                schemaBuilder.SetVendorId(schemaAttribute.VendorId);
-
-            var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
-
-            // Iterate all of the RevitEntity Properties
-            foreach (var pi in properties)
+            if (!string.IsNullOrEmpty(fieldAttribute.Documentation))
+                fieldBuilder.SetDocumentation(fieldAttribute.Documentation);
+            if (fieldBuilder is not null)
             {
-                //get the field attribute of public properties
-                var propertyAttributes = 
-                    pi.GetCustomAttributes(typeof (FieldAttribute), true);
-
-                // if property does not have a FieldAttribute
-                // skip this property
-                if (propertyAttributes.Length == 0)
-                    continue;
-
-                FieldAttribute fieldAttribute = 
-                    _fieldAttributeExtractor.GetAttribute(pi);
-
-                FieldBuilder fieldBuilder =
-                    _fieldFactory.CreateField(schemaBuilder, pi);
-
-                /*
-                //If entity contains field of IRevitEntity
-                //also create a schema and add subSchemaId
-                var iRevitEntity = pi.PropertyType.GetInterface("IRevitEntity");
-                if (iRevitEntity != null)
-                {
-                    fieldBuilder = schemaBuilder.AddSimpleField(pi.Name, typeof(Entity));
-                    var subSchemaAttribute = _schemaAttributeExtractor.GetAttribute(pi.PropertyType);
-                    fieldBuilder.SetSubSchemaGUID(subSchemaAttribute.GUID);
-                }
-                else
-                {
-                    fieldBuilder = schemaBuilder.AddSimpleField(pi.Name, pi.PropertyType);
-                }
-                */
-
-                if (!string.IsNullOrEmpty(fieldAttribute.Documentation))
-                    fieldBuilder.SetDocumentation(fieldAttribute.Documentation);
                 if (fieldBuilder.NeedsUnits())
-                    fieldBuilder.SetUnitType(fieldAttribute.UnitType);
-
-                
+                    fieldBuilder.SetSpec(new ForgeTypeId(fieldAttribute.SpecTypeId));
             }
-
-            return schemaBuilder.Finish();
         }
 
-        #endregion
-
-        
+        return schemaBuilder.Finish();
     }
 }
